@@ -46,6 +46,18 @@ FAS files are compiled AutoLISP code used in AutoCAD. This toolkit makes it easi
 
 ### Decompiling FAS Files
 
+#### Universal Decompiler (Recommended)
+To decompile any FAS file (automatically detects format):
+```bash
+python decompile_any.py path/to/your/file.fas
+```
+
+You can also specify a custom output file:
+```bash
+python decompile_any.py path/to/your/file.fas -o path/to/output.lsp
+```
+
+#### Format-Specific Decompilers
 To decompile a standard FAS file:
 ```bash
 python decompile.py
@@ -91,6 +103,7 @@ fas-lsp/
 │   ├── fas4_parser.py       # Parser for FAS4 format files
 │   └── server.py            # LSP server implementation
 ├── client/                  # Editor extension (placeholder)
+├── decompile_any.py         # Universal decompiler (auto-detects format)
 ├── decompile.py             # Script to decompile standard FAS files
 ├── decompile_fas4.py        # Script to decompile FAS4 format files
 ├── analyze_fas.py           # Utility to analyze FAS file structure
