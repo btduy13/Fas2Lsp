@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "fas-lsp"
+version = "0.1.0"
+description = "Language Server Protocol implementation for FAS (Fast Load) files"
+authors = ["Your Name <your.email@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+pygls = "^1.0.0"
+typing-extensions = "^4.5.0"
+
+[tool.poetry.dev-dependencies]
+pytest = "^7.0.0"
+black = "^22.3.0"
+mypy = "^1.0.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+fas-lsp = "server.server:main" 
