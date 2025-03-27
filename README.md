@@ -1,6 +1,7 @@
 # FAS to LSP Converter
 
 A comprehensive toolkit for working with AutoCAD FAS (Fast Load) files, including decompilation to LSP (LISP) format and a Language Server Protocol implementation for enhanced development experience.
+Please aware that this tool only helps you reverse about 70% of the Fas format to the original Lsp format and far from being perfect but it does the job :D
 
 ## Overview
 
