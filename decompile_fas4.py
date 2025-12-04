@@ -4,8 +4,8 @@ from server.fas4_parser import Fas4Parser
 
 def main():
     # Get input file
-    input_file = "PurgeDictionaryItems[PDI].fas"
-    output_file = "PURGE_DICTIONARY_ITEMS.lsp"  # Use standard LSP name
+    input_file = "PDI.fas"
+    output_file = "PDI(new).lsp"  # Use standard LSP name
     
     if not os.path.exists(input_file):
         print(f"Error: Input file {input_file} not found")
