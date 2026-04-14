@@ -153,8 +153,8 @@ def main():
             print(f"Decompiling {input_file} without crib (using basic structure)")
             code = decompile_without_crib(input_file, output_file)
         
-        print(f"\n✓ Decompiled code written to: {os.path.abspath(output_file)}")
-        print(f"✓ Code is compilable and ready to use")
+        print(f"\n[SUCCESS] Decompiled code written to: {os.path.abspath(output_file)}")
+        print(f"[SUCCESS] Code is compilable and ready to use")
         print("\nPreview:")
         print("=" * 60)
         lines = code.split('\n')

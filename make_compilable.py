@@ -38,7 +38,7 @@ def make_compilable_lisp(fas_file, crib_file=None, output_file=None):
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write(output_code)
         
-        print(f"✓ Created compilable LISP: {output_file}")
+        print(f"[SUCCESS] Created compilable LISP: {output_file}")
         return True
     
     # Try to find crib file automatically (only matching the input file name)
@@ -68,7 +68,7 @@ def make_compilable_lisp(fas_file, crib_file=None, output_file=None):
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write(lisp_code)
         
-        print(f"✓ Created compilable LISP: {output_file}")
+        print(f"[SUCCESS] Created compilable LISP: {output_file}")
         return True
         
     except ImportError:
@@ -83,7 +83,7 @@ def make_compilable_lisp(fas_file, crib_file=None, output_file=None):
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(lisp_code)
             
-            print(f"✓ Created compilable LISP: {output_file}")
+            print(f"[SUCCESS] Created compilable LISP: {output_file}")
             return True
         except Exception as e:
             print(f"Error: {e}")
@@ -112,10 +112,10 @@ def main():
     success = make_compilable_lisp(fas_file, crib_file, output_file)
     
     if success:
-        print("\n✓ Success! The output file is compilable and ready to use.")
+        print("\n[SUCCESS] Success! The output file is compilable and ready to use.")
         print("  You can load it in AutoCAD or compile it back to FAS format.")
     else:
-        print("\n✗ Failed to create compilable LISP code.")
+        print("\n[FAILED] Failed to create compilable LISP code.")
         sys.exit(1)
 
 

@@ -529,8 +529,8 @@ def main():
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write(lisp_code)
         
-        print(f"\n✓ Decompiled code written to: {os.path.abspath(output_file)}")
-        print(f"✓ Code is compilable and should work correctly")
+        print(f"\n[SUCCESS] Decompiled code written to: {os.path.abspath(output_file)}")
+        print(f"[SUCCESS] Code is compilable and should work correctly")
         print("\nPreview:")
         print("-" * 60)
         lines = lisp_code.split('\n')

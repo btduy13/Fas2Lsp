@@ -70,8 +70,8 @@ def decompile_fas(input_file, output_file=None):
                 with open(output_file, 'w', encoding='utf-8') as f:
                     f.write(output_code)
                 
-                print(f"\n✓ Decompiled code written to: {os.path.abspath(output_file)}")
-                print("✓ Code is compilable and ready to use")
+                print(f"\n[SUCCESS] Decompiled code written to: {os.path.abspath(output_file)}")
+                print("[SUCCESS] Code is compilable and ready to use")
                 print("\nPreview:")
                 print("-" * 60)
                 lines = output_code.split('\n')

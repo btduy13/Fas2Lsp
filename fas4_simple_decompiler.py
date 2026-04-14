@@ -140,8 +140,8 @@ if __name__ == '__main__':
         result = decompile_fas4_simple(input_file)
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write(result)
-        print(f"✓ Decompiled to: {output_file}")
-        print(f"✓ Function: {result.split('(defun ')[1].split('(')[0] if '(defun ' in result else 'N/A'}")
+        print(f"[SUCCESS] Decompiled to: {output_file}")
+        print(f"[SUCCESS] Function: {result.split('(defun ')[1].split('(')[0] if '(defun ' in result else 'N/A'}")
     except Exception as e:
         print(f"Error: {e}")
         import traceback
