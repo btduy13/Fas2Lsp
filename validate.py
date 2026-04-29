@@ -177,6 +177,20 @@ def validate_ast(forms: List[Node], text: str) -> List[str]:
         head = form.value[0].value
         if head != 'defun':
             errors.append(f'line {form.line}: top-level form is not a defun: {form_text(form)}')
+            continue
+        if len(form.value) >= 3 and is_symbol(form.value[1]) and form.value[2].kind == 'list':
+            name = str(form.value[1].value).lower()
+            if name.startswith('c:'):
+                required_args = []
+                for arg in form.value[2].value:
+                    if arg.kind == 'symbol' and arg.value == '/':
+                        break
+                    if is_symbol(arg):
+                        required_args.append(str(arg.value))
+                if required_args:
+                    errors.append(
+                        f'line {form.line}: AutoCAD command defun has required args: {", ".join(required_args)}'
+                    )
 
     def walk(node: Node) -> None:
         value = node.value

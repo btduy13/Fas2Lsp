@@ -1,19 +1,19 @@
 ;; Auto-decompiled from PDI.fas
 ;; Decompiler: fas4_decompiler.py  (full-semantics pass)
-;; Functions: 3   Warnings: 0
+;; Functions: 2   Warnings: 0
 
 ;; Recovered strings (first 12):
-;;   \nNo dictionary item(s) matched pattern. 
-;;    dictionary item(s) purged. 
+;;   \nNo dictionary item(s) matched pattern.\s
+;;    dictionary item(s) purged.\s
 ;;   \n
 ;;   ".
 ;;   \n Purging dictionary "
-;;   \n Purge Dictionary Items <Enter case sensitive pattern>: 
-;;   \n NOTE: Purging "ACAD_*" may corrupt the drawing file. 
+;;   \n Purge Dictionary Items <Enter case sensitive pattern>:\s
+;;   \n NOTE: Purging "ACAD_*" may corrupt the drawing file.\s
 ;;   \n ======================================================
-;;   \n     
+;;   \n\s\s\s\s\s
 ;;   \n ------------------------------------------------------
-;;   \n Current Dictionary List: 
+;;   \n Current Dictionary List:\s
 
 ;; Referenced symbols: MSG, A
 (defun msg ()
@@ -21,70 +21,68 @@
 )
 
 ;; Original arg hints: B
-;; Referenced symbols: NAMEDOBJDICT, _al-bind-alist, CDR, CAR, =, C, CONS, N, ACAD_STRLSORT, STRCAT
-;; Referenced strings: \n     , \n ======================================================, \n Purge Dictionary Items <Enter case sensitive pattern>: 
-(defun c:pdi (b)
+;; Referenced symbols: PRINC, _al-bind-alist, NAMEDOBJDICT, ENTGET, CDR, C, CAR, =, N, CONS
+;; Referenced strings: \n Current Dictionary List:\s, \n ------------------------------------------------------, \n\s\s\s\s\s
+(defun c:pdi (/ b c n gvar_31_princ *error* gvar_28_entget)
   (setq c nil)
   (setq n nil)
   (setq gvar_31_princ nil)
   (setq *error* nil)
-  (namedobjdict)
+  (princ)
   (setq gvar_28_entget '_al-bind-alist)
-  (setq c (car (car (namedobjdict))))
+  (setq c (cdr (entget (namedobjdict))))
   (while c
-    (if (cons (car (car c)) 3)
+    (if (= (car (car c)) 3)
       (progn
-        (setq n (cons (car (car c)) n))
+        (setq n (cons (cdr (car c)) n))
       )
     )
-    (if (car c)
+    (if (cdr c)
       (progn
-        (setq c (car c))
+        (setq c (cdr c))
       )
       (progn
         (setq c nil)
       )
     )
   )
-  (entget 'acad_strlsort)
-  (princ "\n     ")
-  (setq b (strcat n))
+  (princ "\n Current Dictionary List: ")
+  (princ "\n ------------------------------------------------------")
+  (setq b (acad_strlsort n))
   ;; init-args 3: 'c, nil
   (foreach c b
-    (entget (getstring "\n ======================================================" c))
+    (princ (strcat "\n     " c))
   )
-  (entget 'textscr)
-  (princ "\n Purge Dictionary Items <Enter case sensitive pattern>: ")
+  (princ "\n ======================================================")
+  (princ "\n NOTE: Purging \"ACAD_*\" may corrupt the drawing file. ")
   (textscr)
-  (strlen 'strlen)
-  (setq *error* 0)
-  (setq b n)
-  ;; init-args 3: 'c, nil
-  (foreach c b
-    (if (dictremove c gvar_31_princ)
-      (progn
-        (dictremove (namedobjdict) c)
-        (entget (wcmatch '1+ c "\n"))
-        (setq *error* (itoa *error*))
+  (if (> (strlen (setq gvar_31_princ (getstring "\n Purge Dictionary Items <Enter case sensitive pattern>: "))) 0)
+    (progn
+      (setq *error* 0)
+      (setq b n)
+      ;; init-args 3: 'c, nil
+      (foreach c b
+        (if (wcmatch c gvar_31_princ)
+          (progn
+            (dictremove (namedobjdict) c)
+            (princ (strcat "\n Purging dictionary \"" c "\"."))
+            (setq *error* (1+ *error*))
+          )
+        )
       )
-    )
-  )
-)
-
-;; Referenced symbols: *ERROR*, DICTREMOVE, NAMEDOBJDICT, vl-ACAD-defun
-;; Referenced strings:  dictionary item(s) purged. 
-(defun fas_init_2 ()
-  (if (dictremove *error* 0)
-    (progn
-      (entget (wcmatch " dictionary item(s) purged. " (itoa *error*) '((cons 20 59) (cons 0 517))))
-    )
-    (progn
-      (entget 'vl-acad-defun)
+      (if (> *error* 0)
+        (progn
+          (princ (strcat "\n" (itoa *error*) " dictionary item(s) purged. "))
+        )
+        (progn
+          (princ "\nNo dictionary item(s) matched pattern. ")
+        )
+      )
     )
   )
   (setq c nil)
   (setq n nil)
   (setq gvar_31_princ nil)
   (setq *error* nil)
-  (namedobjdict)
+  (princ)
 )

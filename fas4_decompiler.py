@@ -688,6 +688,8 @@ class ControlFlowAnalyzer:
             end_idx = clear_idx
             if end_idx + 1 < len(self.instructions) and self.instructions[end_idx + 1].op_name == 'END_DEFUN':
                 end_idx += 1
+            elif self._has_meaningful_code(self.instructions[end_idx + 1:next_start]):
+                return min(next_start - 1, len(self.instructions) - 1)
             return end_idx
         return min(next_start - 1, len(self.instructions) - 1)
 
@@ -757,6 +759,8 @@ class LispGenerator:
         'TEXTSCR': {0},
         'GETSTRING': {1, 2},
         'STRLEN': {1},
+        'STRCAT': set(range(1, 17)),
+        'ACAD_STRLSORT': {1},
         'WCMATCH': {2, 3},
         'DICTREMOVE': {2},
         'ITOA': {1},
@@ -783,10 +787,38 @@ class LispGenerator:
             str(item[1]) for item in fas.resource_items
             if item[0] == 'STRING' and isinstance(item[1], str)
         ]
+        self.code_ref_bias = self._infer_code_ref_bias()
+        self.variable_ref_floor = self._infer_variable_ref_floor()
         self.function_names_by_offset: Dict[int, str] = {}
         self.function_names_by_index: Dict[int, str] = {}
         self.command_candidates: List[str] = []
         self._build_function_catalog()
+
+    def _infer_code_ref_bias(self) -> int:
+        """Infer the leading holes in the runtime literal/call table.
+
+        Some FAS4 streams leave the first resource slots empty, while code
+        operands still address the compact table. Variable operands are not
+        biased, so this is only applied by the code-reference helpers below.
+        """
+        bias = 0
+        for value in self.fas.function_gvars:
+            if value is not None:
+                break
+            bias += 1
+        return bias if 0 < bias <= 4 else 0
+
+    def _infer_variable_ref_floor(self) -> int:
+        last_string_idx = -1
+        for idx, value in enumerate(self.fas.function_gvars):
+            if isinstance(value, tuple) and len(value) == 2 and value[0] == 'STRING':
+                last_string_idx = idx
+
+        for idx in range(last_string_idx + 1, len(self.fas.function_gvars)):
+            name = self._extract_symbol_text(self.fas.function_gvars[idx])
+            if name and name.upper() not in self.BUILTIN_SYMBOLS:
+                return idx
+        return len(self.fas.function_gvars)
 
     def generate(self, functions: List[FunctionDef], filename: str) -> str:
         specs = [self._analyze_function(func, idx) for idx, func in enumerate(functions)]
@@ -897,7 +929,7 @@ class LispGenerator:
             local_originals.append(raw_name)
             slot_names[slot] = safe_name
 
-        return {
+        spec = {
             'func': func,
             'index': func_index,
             'is_init': is_init,
@@ -915,6 +947,17 @@ class LispGenerator:
             'bound_symbol_map': bound_symbol_map,
             'global_aliases': {},
         }
+        self._localize_assigned_globals(spec, func.instructions[signature['body_start']:])
+        return spec
+
+    def _localize_assigned_globals(self, spec: Dict[str, Any], instructions: List[Instruction]) -> None:
+        for inst in instructions:
+            if inst.op_name not in ('SETQ_G',) or not inst.operands:
+                continue
+            name = self._value_from_gvar(inst.operands[0], spec)
+            if name not in spec['args'] and name not in spec['locals']:
+                spec['locals'].append(name)
+                spec['local_originals'].append(name)
 
     def _apply_command_fallback(self, specs: List[Dict[str, Any]]) -> None:
         unique_commands = list(dict.fromkeys(
@@ -942,10 +985,20 @@ class LispGenerator:
             )
 
     def _emit_function(self, spec: Dict[str, Any]) -> List[str]:
-        args_text = ' '.join(spec['args'])
+        args = spec['args']
+        locals_list = spec['locals']
+        if spec['name'].lower().startswith('c:') and args:
+            # AutoLISP command functions are invoked by AutoCAD with no
+            # arguments. Signature hints for C: functions are compiler-local
+            # slots, so keep the generated command runnable by localizing them.
+            locals_list = args + locals_list
+            args = []
+
+        args_text = ' '.join(args)
         local_text = ''
-        if spec['locals']:
-            local_text = ' / ' + ' '.join(spec['locals'])
+        if locals_list:
+            slash = ' /' if args_text else '/'
+            local_text = slash + ' ' + ' '.join(locals_list)
 
         lines: List[str] = []
         normalized_name = self._normalize_symbol(
@@ -1040,10 +1093,14 @@ class LispGenerator:
                 stack.append(self._make_call_text('eval', args))
             elif name == 'SETQ_G' and inst.operands:
                 expr = pop_expr()
+                if stack and stack[-1] == expr:
+                    stack.pop()
                 target = self._value_from_gvar(inst.operands[0], spec)
                 stack.append(f'(setq {target} {expr})')
             elif name == 'SET_LOCAL' and inst.operands:
                 expr = pop_expr()
+                if stack and stack[-1] == expr:
+                    stack.pop()
                 target = self._local_name(inst.operands[0], spec)
                 stack.append(f'(setq {target} {expr})')
             elif name == 'CLEAR_LOCAL' and inst.operands:
@@ -1232,10 +1289,14 @@ class LispGenerator:
                 stack.append(self._make_call_text('eval', args))
             elif name == 'SETQ_G' and inst.operands:
                 expr = pop_expr()
+                if stack and stack[-1] == expr:
+                    stack.pop()
                 target = self._value_from_gvar(inst.operands[0], spec)
                 stack.append(f'(setq {target} {expr})')
             elif name == 'SET_LOCAL' and inst.operands:
                 expr = pop_expr()
+                if stack and stack[-1] == expr:
+                    stack.pop()
                 target = self._local_name(inst.operands[0], spec)
                 stack.append(f'(setq {target} {expr})')
             elif name == 'CLEAR_LOCAL' and inst.operands:
@@ -1465,11 +1526,11 @@ class LispGenerator:
         for inst in instructions:
             candidate = None
             if inst.op_name in ('USUBR', 'FUNC') and len(inst.operands) >= 2:
-                candidate = self._gvar_symbol(inst.operands[1])
+                candidate = self._code_gvar_symbol(inst.operands[1]) or self._gvar_symbol(inst.operands[1])
             elif inst.op_name == 'PUSH_VALUE' and inst.operands:
                 candidate = self._gvar_symbol(inst.operands[0])
             elif inst.op_name == 'PUSH_G' and inst.operands:
-                literal = self._gvar_item(inst.operands[0])
+                literal = self._code_gvar_item(inst.operands[0])
                 candidate = self._extract_symbol_text(literal)
             if candidate and candidate not in seen:
                 names.append(candidate)
@@ -1482,7 +1543,7 @@ class LispGenerator:
         for inst in instructions:
             if inst.op_name != 'PUSH_G' or not inst.operands:
                 continue
-            literal = self._gvar_item(inst.operands[0])
+            literal = self._code_gvar_item(inst.operands[0])
             text = self._extract_text(literal)
             if isinstance(text, str) and not self._extract_symbol_text(literal):
                 if text not in seen:
@@ -1524,8 +1585,23 @@ class LispGenerator:
             return self.fas.symbols[idx]
         return None
 
+    def _code_gvar_item(self, idx: int) -> Any:
+        shifted_idx = idx + self.code_ref_bias
+        if (
+            self.code_ref_bias
+            and idx < self.variable_ref_floor
+            and 0 <= shifted_idx < len(self.fas.function_gvars)
+            and self.fas.function_gvars[shifted_idx] is not None
+        ):
+            return self.fas.function_gvars[shifted_idx]
+        return self._gvar_item(idx)
+
     def _gvar_symbol(self, idx: int) -> Optional[str]:
         value = self._gvar_item(idx)
+        return self._extract_symbol_text(value)
+
+    def _code_gvar_symbol(self, idx: int) -> Optional[str]:
+        value = self._code_gvar_item(idx)
         return self._extract_symbol_text(value)
 
     def _resource_gvar_text(self, idx: int) -> Optional[str]:
@@ -1552,11 +1628,19 @@ class LispGenerator:
         return aliases[idx]
 
     def _literal_from_gvar(self, idx: int) -> str:
-        return self._render_literal(self._gvar_item(idx))
+        return self._render_literal(self._code_gvar_item(idx))
 
     def _call_name(self, idx: int, argc: int = 0, spec: Optional[Dict[str, Any]] = None,
                    args: Optional[List[str]] = None) -> str:
         raw_name = self._gvar_symbol(idx)
+        biased_name = self._code_gvar_symbol(idx)
+        if biased_name and biased_name != raw_name and self._looks_callable_name(biased_name):
+            biased_arity = self.COMMON_ARITY.get(biased_name.upper())
+            raw_ok = bool(raw_name and self._looks_callable_name(raw_name) and not self._is_bad_builtin_arity(raw_name, argc))
+            if biased_arity is not None and argc in biased_arity:
+                return self._normalize_symbol(biased_name, f'gfun_{idx}', allow_command_prefix=True)
+            if not raw_ok:
+                return self._normalize_symbol(biased_name, f'gfun_{idx}', allow_command_prefix=True)
         if raw_name and self._looks_callable_name(raw_name):
             repaired = self._repair_call_target(idx, raw_name, argc, spec, args or [])
             if repaired:
@@ -1771,7 +1855,11 @@ class LispGenerator:
         return f'"{escaped}"'
 
     def _comment_text(self, value: str) -> str:
-        return value.replace('\r', '\\r').replace('\n', '\\n')
+        text = value.replace('\r', '\\r').replace('\n', '\\n')
+        trailing_spaces = len(text) - len(text.rstrip(' '))
+        if trailing_spaces:
+            text = text.rstrip(' ') + ('\\s' * trailing_spaces)
+        return text
 
 class Fas4Decompiler:
     def decompile(self, filepath: str, output_path: str = None) -> str:
