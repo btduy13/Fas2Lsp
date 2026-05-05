@@ -751,7 +751,7 @@ class LispGenerator:
     BUILTIN_SYMBOLS = {
         '=', '1+', 'ACAD_STRLSORT', 'ATOM', 'CAR', 'CDR', 'CONS', 'DICTREMOVE',
         '*ERROR*', 'ENTGET', 'GETSTRING', 'ITOA', 'NAMEDOBJDICT', 'NOT', 'PRINC', 'STRCAT',
-        'STRLEN', 'TEXTSCR', 'WCMATCH', 'VL-ACAD-DEFUN'
+        'STRLEN', 'TEXTSCR', 'WCMATCH', 'VL-ACAD-DEFUN', 'POLAR'
     }
     COMMON_ARITY = {
         'PRINC': {0, 1},
@@ -778,6 +778,7 @@ class LispGenerator:
         'ATOM': {1},
         'ENTGET': {1},
         'ENTDEL': {1},
+        'POLAR': {3},
         'RTOS': {1, 2, 3},
     }
 
@@ -824,6 +825,10 @@ class LispGenerator:
         specs = [self._analyze_function(func, idx) for idx, func in enumerate(functions)]
         self._apply_command_fallback(specs)
         self._finalize_function_names(specs)
+        self.needs_unary_polar_helper = self._uses_unary_polar(specs)
+        self.needs_project_rtos_helper = self._uses_project_rtos(specs)
+        self.needs_project_runtime_helpers = self._uses_project_runtime_helpers(specs)
+        self._adjust_signatures_for_observed_calls(specs)
         specs = self._filter_runnable_specs(specs)
 
         source_name = os.path.basename(filename)
@@ -832,6 +837,14 @@ class LispGenerator:
             ';; Generated AutoLISP output',
             ''
         ]
+
+        if (
+            self.needs_unary_polar_helper
+            or self.needs_project_rtos_helper
+            or self.needs_project_runtime_helpers
+        ):
+            lines.extend(self._emit_support_helpers())
+            lines.append('')
 
         for spec in specs:
             lines.extend(self._emit_function(spec))
@@ -899,16 +912,23 @@ class LispGenerator:
         arg_names: List[str] = []
         arg_originals: List[str] = []
         arg_slots = set()
+        bound_symbol_map: Dict[str, str] = {}
+        bound_gvar_map: Dict[int, str] = {}
+        bind_arg_symbols = not (original_name or '').upper().startswith('C:')
         for pos, (slot, raw_name) in enumerate(signature['args']):
             safe_name = self._unique_symbol(raw_name, f'arg_{pos + 1}', False, local_used)
             arg_names.append(safe_name)
             arg_originals.append(raw_name)
             slot_names[slot] = safe_name
             arg_slots.add(slot)
+            if bind_arg_symbols:
+                arg_symbol_indices = signature.get('arg_symbol_indices', [])
+                if pos < len(arg_symbol_indices):
+                    bound_gvar_map[arg_symbol_indices[pos]] = safe_name
+                bound_symbol_map[raw_name.upper()] = safe_name
 
         local_names: List[str] = []
         local_originals: List[str] = []
-        bound_symbol_map: Dict[str, str] = {}
         for pos, raw_name in enumerate(signature.get('local_binding_names', [])):
             safe_name = self._unique_symbol(raw_name, f'local_{pos + 1}', False, local_used)
             local_names.append(safe_name)
@@ -939,6 +959,7 @@ class LispGenerator:
             'slot_names': slot_names,
             'local_used': local_used,
             'bound_symbol_map': bound_symbol_map,
+            'bound_gvar_map': bound_gvar_map,
             'global_aliases': {},
         }
         self._localize_assigned_globals(spec, func.instructions[signature['body_start']:])
@@ -977,6 +998,160 @@ class LispGenerator:
                 True,
                 used,
             )
+
+    def _uses_unary_polar(self, specs: List[Dict[str, Any]]) -> bool:
+        for spec in specs:
+            for inst in spec['func'].instructions[spec['body_start']:]:
+                if inst.op_name not in ('USUBR', 'FUNC') or len(inst.operands) < 2:
+                    continue
+                if inst.operands[0] != 1:
+                    continue
+                raw_name = self._gvar_symbol(inst.operands[1]) or self._code_gvar_symbol(inst.operands[1])
+                if raw_name and raw_name.upper() == 'POLAR':
+                    return True
+        return False
+
+    def _uses_project_rtos(self, specs: List[Dict[str, Any]]) -> bool:
+        for spec in specs:
+            for inst in spec['func'].instructions[spec['body_start']:]:
+                if inst.op_name not in ('USUBR', 'FUNC') or len(inst.operands) < 2:
+                    continue
+                if inst.operands[0] != 3:
+                    continue
+                raw_name = self._gvar_symbol(inst.operands[1]) or self._code_gvar_symbol(inst.operands[1])
+                if raw_name and raw_name.upper() == 'RTOS':
+                    return True
+        return False
+
+    def _uses_project_runtime_helpers(self, specs: List[Dict[str, Any]]) -> bool:
+        helper_names = {
+            '*EN_RAY*',
+            'AXEDYN-REACCREATE',
+            'GETVAR',
+            'IN_PARAM',
+            'PROJET/PA_PROJET/AR_PROJET',
+            '1-',
+        }
+        for spec in specs:
+            for inst in spec['func'].instructions[spec['body_start']:]:
+                if inst.op_name not in ('USUBR', 'FUNC') or len(inst.operands) < 2:
+                    continue
+                raw_name = self._gvar_symbol(inst.operands[1]) or self._code_gvar_symbol(inst.operands[1])
+                if raw_name and raw_name.upper() in helper_names:
+                    return True
+        return False
+
+    def _adjust_signatures_for_observed_calls(self, specs: List[Dict[str, Any]]) -> None:
+        name_to_spec: Dict[str, Dict[str, Any]] = {}
+        for spec in specs:
+            for name in (
+                spec['name'],
+                self._normalize_symbol(spec.get('original_name', ''), spec['name'], allow_command_prefix=True),
+            ):
+                if name:
+                    name_to_spec[name.lower()] = spec
+
+        observed: Dict[str, Set[int]] = {}
+        for spec in specs:
+            for inst in spec['func'].instructions[spec['body_start']:]:
+                if inst.op_name not in ('USUBR', 'FUNC') or len(inst.operands) < 2:
+                    continue
+                raw_name = self._gvar_symbol(inst.operands[1]) or self._code_gvar_symbol(inst.operands[1])
+                if not raw_name:
+                    continue
+                call_name = self._normalize_symbol(raw_name, raw_name, allow_command_prefix=True).lower()
+                if call_name in name_to_spec:
+                    observed.setdefault(call_name, set()).add(inst.operands[0])
+
+        for key, arities in observed.items():
+            spec = name_to_spec.get(key)
+            if not spec or spec['name'].lower().startswith('c:') or not spec['args']:
+                continue
+            max_arity = max(arities)
+            if max_arity >= len(spec['args']):
+                continue
+            demoted = spec['args'][max_arity:]
+            spec['args'] = spec['args'][:max_arity]
+            spec['locals'] = demoted + spec['locals']
+            spec['local_originals'] = spec['arg_originals'][max_arity:] + spec['local_originals']
+            spec['arg_originals'] = spec['arg_originals'][:max_arity]
+
+    def _emit_support_helpers(self) -> List[str]:
+        lines: List[str] = []
+        if self.needs_unary_polar_helper:
+            lines.extend([
+                '(defun fas-polar1 (value)',
+                '  value',
+                ')',
+            ])
+        if self.needs_project_rtos_helper:
+            if lines:
+                lines.append('')
+            lines.extend([
+                '(defun fas-rtos1 (value)',
+                '  value',
+                ')',
+                '',
+                '(defun fas-rtos3 (bucket key value)',
+                '  (if value value key)',
+                ')',
+            ])
+        if self.needs_project_runtime_helpers:
+            if lines:
+                lines.append('')
+            lines.extend([
+                '(defun fas-assoc-value (data key / hit)',
+                '  (cond',
+                "    ((null data) nil)",
+                "    ((and (listp key) (= (car key) 'lambda)) (apply key (list data)))",
+                "    ((and (listp key) (not (null key))) (mapcar '(lambda (item) (fas-assoc-value data item)) key))",
+                "    ((and (numberp key) (= (type data) 'ENAME) (setq hit (assoc key (entget data)))) (cdr hit))",
+                '    ((and (listp data) (numberp key)) (nth key data))',
+                '    ((and (listp data) (listp (car data)) (setq hit (assoc key data))) (cdr hit))',
+                '    (T nil)',
+                '  )',
+                ')',
+                '',
+                '(defun in_param (data key)',
+                '  (fas-assoc-value data key)',
+                ')',
+                '',
+                '(defun fas-getvar2 (data key)',
+                '  (fas-assoc-value data key)',
+                ')',
+                '',
+                '(defun fas-getvar3 (data key default / value)',
+                '  (setq value (fas-assoc-value data key))',
+                '  (if value value default)',
+                ')',
+                '',
+                '(defun fas-1- (value)',
+                '  (if (numberp value) (1- value) value)',
+                ')',
+                '',
+                '(defun axedyn-reaccreate (value)',
+                '  value',
+                ')',
+                '',
+                '(defun *en_ray* (entity data)',
+                '  (if entity entity data)',
+                ')',
+                '',
+                '(defun fas-select-entity (message / picked)',
+                '  (setq picked (entsel (if (= (type message) \'STR) message "\\nSelect object: ")))',
+                '  (cond',
+                "    ((= (type picked) 'ENAME) picked)",
+                '    ((and (listp picked) picked) (car picked))',
+                '    (T nil)',
+                '  )',
+                ')',
+                '',
+                '(defun projet_pa_projet_ar_projet (arg_1 arg_2 arg_3 arg_4 arg_5 arg_6 / picked)',
+                '  (setq picked (fas-select-entity arg_5))',
+                '  picked',
+                ')',
+            ])
+        return lines
 
     def _filter_runnable_specs(self, specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         command_names = {spec['name'] for spec in specs if spec['name'].lower().startswith('c:')}
@@ -1189,6 +1364,8 @@ class LispGenerator:
                 stack.append(self._make_call_text('list', args))
             elif name in ('USUBR', 'FUNC') and len(inst.operands) >= 2:
                 argc = inst.operands[0]
+                if self._skip_literal_zero_arg_call(inst.operands[1], argc):
+                    continue
                 args = pop_many(argc)
                 call_name = self._call_name(inst.operands[1], argc, spec, args)
                 stack.append(self._make_call_text(call_name, args))
@@ -1380,6 +1557,9 @@ class LispGenerator:
                 stack.append(self._make_call_text('1-', [pop_expr() or 'nil']))
             elif name in ('USUBR', 'FUNC') and len(inst.operands) >= 2:
                 argc = inst.operands[0]
+                if self._skip_literal_zero_arg_call(inst.operands[1], argc):
+                    i += 1
+                    continue
                 args = pop_many(argc)
                 call_name = self._call_name(inst.operands[1], argc, spec, args)
                 stack.append(self._make_call_text(call_name, args))
@@ -1599,6 +1779,7 @@ class LispGenerator:
                 pushed.append(('nil', None))
 
         args: List[Tuple[int, str]] = []
+        arg_symbol_indices: List[int] = []
         local_binding_names: List[str] = []
         pair_items = pushed[-((init_count // 2) * 2):]
         for pos in range(0, len(pair_items) - 1, 2):
@@ -1611,8 +1792,14 @@ class LispGenerator:
                     continue
                 raw_name = self._gvar_symbol(left[1]) or f'arg_{len(args) + 1}'
                 args.append((right[1], raw_name))
+                arg_symbol_indices.append(left[1])
 
-        return {'args': args, 'body_start': init_idx + 1, 'local_binding_names': local_binding_names}
+        return {
+            'args': args,
+            'arg_symbol_indices': arg_symbol_indices,
+            'body_start': init_idx + 1,
+            'local_binding_names': local_binding_names,
+        }
 
     def _referenced_symbols(self, instructions: List[Instruction]) -> List[str]:
         names: List[str] = []
@@ -1704,6 +1891,10 @@ class LispGenerator:
         return None
 
     def _value_from_gvar(self, idx: int, spec: Dict[str, Any]) -> str:
+        bound_gvar = spec.get('bound_gvar_map', {}).get(idx)
+        if bound_gvar:
+            return bound_gvar
+
         bound_name = self._bound_symbol_name(idx, spec)
         if bound_name:
             return bound_name
@@ -1728,6 +1919,24 @@ class LispGenerator:
                    args: Optional[List[str]] = None) -> str:
         raw_name = self._gvar_symbol(idx)
         biased_name = self._code_gvar_symbol(idx)
+        if argc == 1 and (
+            (raw_name and raw_name.upper() == 'POLAR')
+            or (biased_name and biased_name.upper() == 'POLAR')
+        ):
+            return 'fas-polar1'
+        if argc == 3 and args and (
+            (raw_name and raw_name.upper() == 'RTOS')
+            or (biased_name and biased_name.upper() == 'RTOS')
+        ) and self._looks_project_rtos_args(args):
+            return 'fas-rtos3'
+        if raw_name and raw_name.upper() == '1-' and argc == 1:
+            return 'fas-1-'
+        if biased_name and biased_name.upper() == '1-' and argc == 1:
+            return 'fas-1-'
+        if raw_name and raw_name.upper() == 'GETVAR' and argc in (2, 3):
+            return f'fas-getvar{argc}'
+        if biased_name and biased_name.upper() == 'GETVAR' and argc in (2, 3):
+            return f'fas-getvar{argc}'
         if biased_name and biased_name != raw_name and self._looks_callable_name(biased_name):
             biased_arity = self.COMMON_ARITY.get(biased_name.upper())
             raw_ok = bool(raw_name and self._looks_callable_name(raw_name) and not self._is_bad_builtin_arity(raw_name, argc))
@@ -1739,9 +1948,21 @@ class LispGenerator:
             repaired = self._repair_call_target(idx, raw_name, argc, spec, args or [])
             if repaired:
                 raw_name = repaired
+            if raw_name.upper() == 'RTOS' and self._looks_project_rtos_args(args or []):
+                return 'fas-rtos3' if argc == 3 else 'fas-rtos1'
+            if raw_name.upper() == '1-' and argc == 1:
+                return 'fas-1-'
+            if raw_name.upper() == 'GETVAR' and argc in (2, 3):
+                return f'fas-getvar{argc}'
             return self._normalize_symbol(raw_name, f'gfun_{idx}', allow_command_prefix=True)
         repaired = self._repair_call_target(idx, None, argc, spec, args or [])
         if repaired:
+            if repaired.upper() == 'RTOS' and self._looks_project_rtos_args(args or []):
+                return 'fas-rtos3' if argc == 3 else 'fas-rtos1'
+            if repaired.upper() == '1-' and argc == 1:
+                return 'fas-1-'
+            if repaired.upper() == 'GETVAR' and argc in (2, 3):
+                return f'fas-getvar{argc}'
             return self._normalize_symbol(repaired, f'gfun_{idx}', allow_command_prefix=True)
         return f'gfun_{idx}'
 
@@ -1879,6 +2100,27 @@ class LispGenerator:
         if raw_name:
             return raw_name
         return None
+
+    def _skip_literal_zero_arg_call(self, idx: int, argc: int) -> bool:
+        """Drop a known malformed no-arg call reconstructed as ``(re_rel)``.
+
+        In bib.fas, three zero-argument USUBR instructions point at the prompt
+        string "Choix du point :". The nearest-symbol repair used to map those
+        to RE_REL, but the file only uses RE_REL as data and as a three-arg
+        helper, so the fabricated ``(re_rel)`` crashes BricsCAD immediately.
+        """
+        if argc != 0:
+            return False
+        if self._gvar_symbol(idx) or self._code_gvar_symbol(idx):
+            return False
+        value = self._code_gvar_item(idx)
+        text = self._extract_text(value)
+        return text == 'Choix du point :' and (
+            (self._gvar_symbol(idx + 4) or '').upper() == 'RE_REL'
+        )
+
+    def _looks_project_rtos_args(self, args: List[str]) -> bool:
+        return bool(args and args[0].lstrip().startswith("'"))
 
     def _is_bad_builtin_arity(self, name: str, argc: int) -> bool:
         allowed = self.COMMON_ARITY.get(name.upper())
