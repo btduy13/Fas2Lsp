@@ -7,6 +7,10 @@ from typing import Any, List, Tuple
 
 
 LOGIC_COMMENT_RE = re.compile(r'^\s*;;.*\b(jump|unresolved|gfun_)\b', re.IGNORECASE)
+DEBUG_COMMENT_RE = re.compile(
+    r'^\s*;;\s*(Recovered strings|Referenced symbols|Referenced strings|Original arg hints|init-args|cleanup)\b',
+    re.IGNORECASE,
+)
 SYMBOL_RE = re.compile(r'^[A-Za-z0-9_\-?!*/=<>+:.]+$')
 NUMBER_RE = re.compile(r'^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$')
 
@@ -169,6 +173,8 @@ def validate_ast(forms: List[Node], text: str) -> List[str]:
     for line_no, line in enumerate(text.splitlines(), start=1):
         if LOGIC_COMMENT_RE.search(line):
             errors.append(f'line {line_no}: logic placeholder comment: {line.strip()}')
+        if DEBUG_COMMENT_RE.search(line):
+            errors.append(f'line {line_no}: debug comment in runnable output: {line.strip()}')
 
     for form in forms:
         if not isinstance(form.value, list) or not form.value:

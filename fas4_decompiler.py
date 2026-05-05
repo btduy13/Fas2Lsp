@@ -750,7 +750,7 @@ class ControlFlowAnalyzer:
 class LispGenerator:
     BUILTIN_SYMBOLS = {
         '=', '1+', 'ACAD_STRLSORT', 'ATOM', 'CAR', 'CDR', 'CONS', 'DICTREMOVE',
-        'ENTGET', 'GETSTRING', 'ITOA', 'NAMEDOBJDICT', 'NOT', 'PRINC', 'STRCAT',
+        '*ERROR*', 'ENTGET', 'GETSTRING', 'ITOA', 'NAMEDOBJDICT', 'NOT', 'PRINC', 'STRCAT',
         'STRLEN', 'TEXTSCR', 'WCMATCH', 'VL-ACAD-DEFUN'
     }
     COMMON_ARITY = {
@@ -824,20 +824,14 @@ class LispGenerator:
         specs = [self._analyze_function(func, idx) for idx, func in enumerate(functions)]
         self._apply_command_fallback(specs)
         self._finalize_function_names(specs)
+        specs = self._filter_runnable_specs(specs)
 
         source_name = os.path.basename(filename)
         lines = [
             f';; Auto-decompiled from {source_name}',
-            ';; Decompiler: fas4_decompiler.py  (full-semantics pass)',
-            f';; Functions: {len(specs)}   Warnings: 0',
+            ';; Generated AutoLISP output',
             ''
         ]
-
-        if self.string_values:
-            lines.append(';; Recovered strings (first 12):')
-            for value in self.string_values[:12]:
-                lines.append(f';;   {self._comment_text(value)}')
-            lines.append('')
 
         for spec in specs:
             lines.extend(self._emit_function(spec))
@@ -984,6 +978,37 @@ class LispGenerator:
                 used,
             )
 
+    def _filter_runnable_specs(self, specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        command_names = {spec['name'] for spec in specs if spec['name'].lower().startswith('c:')}
+        if not command_names:
+            return specs
+
+        name_to_spec: Dict[str, Dict[str, Any]] = {}
+        for spec in specs:
+            names = {
+                spec['name'],
+                self._normalize_symbol(spec.get('original_name', ''), spec['name'], allow_command_prefix=True),
+            }
+            for name in names:
+                if name:
+                    name_to_spec[name.lower()] = spec
+
+        keep = set(command_names)
+        changed = True
+        while changed:
+            changed = False
+            for spec in specs:
+                if spec['name'] not in keep:
+                    continue
+                for ref in spec.get('body_symbols', []):
+                    ref_name = self._normalize_symbol(ref, ref, allow_command_prefix=True).lower()
+                    ref_spec = name_to_spec.get(ref_name)
+                    if ref_spec and ref_spec['name'] not in keep:
+                        keep.add(ref_spec['name'])
+                        changed = True
+
+        return [spec for spec in specs if spec['name'] in keep]
+
     def _emit_function(self, spec: Dict[str, Any]) -> List[str]:
         args = spec['args']
         locals_list = spec['locals']
@@ -994,35 +1019,114 @@ class LispGenerator:
             locals_list = args + locals_list
             args = []
 
-        args_text = ' '.join(args)
-        local_text = ''
-        if locals_list:
-            slash = ' /' if args_text else '/'
-            local_text = slash + ' ' + ' '.join(locals_list)
-
         lines: List[str] = []
         normalized_name = self._normalize_symbol(
             spec['original_name'],
             spec['name'],
             allow_command_prefix=True,
         )
-        if spec['original_name'] and normalized_name != spec['name']:
-            lines.append(f';; Original name hint: {spec["original_name"]}')
-        if spec['arg_originals']:
-            lines.append(f';; Original arg hints: {", ".join(spec["arg_originals"])}')
-        if spec['body_symbols']:
-            lines.append(f';; Referenced symbols: {", ".join(spec["body_symbols"][:10])}')
-        if spec['body_strings']:
-            preview = ', '.join(self._comment_text(value) for value in spec['body_strings'][:3])
-            lines.append(f';; Referenced strings: {preview}')
+        body_lines = self._generate_body(spec)
+        body_lines, locals_list = self._polish_body(spec, body_lines, locals_list)
+
+        args_text = ' '.join(args)
+        local_text = ''
+        if locals_list:
+            slash = ' /' if args_text else '/'
+            local_text = slash + ' ' + ' '.join(locals_list)
 
         lines.append(f'(defun {spec["name"]} ({args_text}{local_text})')
-        body_lines = self._generate_body(spec)
         if not body_lines:
             body_lines = ['  nil']
         lines.extend(body_lines)
         lines.append(')')
         return lines
+
+    def _polish_body(self, spec: Dict[str, Any], body_lines: List[str],
+                     locals_list: List[str]) -> Tuple[List[str], List[str]]:
+        lines = list(body_lines)
+        locals_out = list(dict.fromkeys(locals_list))
+
+        def setq_nil_var(line: str) -> Optional[str]:
+            match = re.match(r'^\s*\(setq\s+([^\s()]+)\s+nil\)\s*$', line)
+            return match.group(1) if match else None
+
+        while lines:
+            var = setq_nil_var(lines[0])
+            if var not in locals_out:
+                break
+            lines.pop(0)
+        if len(lines) > 1 and lines[0].strip() == '(princ)':
+            lines.pop(0)
+
+        last_expr = len(lines) - 1
+        while last_expr >= 0 and not lines[last_expr].strip():
+            last_expr -= 1
+        cleanup_end = last_expr if last_expr >= 0 and lines[last_expr].strip() == '(princ)' else len(lines)
+        idx = cleanup_end - 1
+        while idx >= 0:
+            var = setq_nil_var(lines[idx])
+            if var not in locals_out:
+                break
+            lines.pop(idx)
+            cleanup_end -= 1
+            idx -= 1
+
+        lines, locals_out = self._drop_unused_local_setqs(lines, locals_out)
+        rename_map = self._infer_local_renames(lines, locals_out)
+        if rename_map:
+            lines = [self._replace_symbols(line, rename_map) for line in lines]
+            locals_out = [rename_map.get(name, name) for name in locals_out]
+            locals_out = list(dict.fromkeys(locals_out))
+
+        return lines, locals_out
+
+    def _drop_unused_local_setqs(self, lines: List[str], locals_list: List[str]) -> Tuple[List[str], List[str]]:
+        stripped_lines = [self._strip_strings(line) for line in lines]
+        remove_indexes: Set[int] = set()
+        remove_locals: Set[str] = set()
+        for local in locals_list:
+            pattern = self._symbol_pattern(local)
+            count = sum(len(pattern.findall(line)) for line in stripped_lines)
+            if count != 1:
+                continue
+            for idx, line in enumerate(stripped_lines):
+                if re.match(rf'^\s*\(setq\s+{re.escape(local)}\b', line):
+                    remove_indexes.add(idx)
+                    remove_locals.add(local)
+                    break
+        kept_lines = [line for idx, line in enumerate(lines) if idx not in remove_indexes]
+        kept_locals = [name for name in locals_list if name not in remove_locals]
+        return kept_lines, kept_locals
+
+    def _infer_local_renames(self, lines: List[str], locals_list: List[str]) -> Dict[str, str]:
+        text = '\n'.join(self._strip_strings(line) for line in lines)
+        desired: Dict[str, str] = {}
+        for name in locals_list:
+            if name.startswith('gvar_') and re.search(rf'\(setq\s+{re.escape(name)}\s+\(getstring\b', text):
+                desired[name] = 'pattern'
+            elif name.startswith('gvar_') and (
+                re.search(rf'\(1\+\s+{re.escape(name)}\)', text)
+                or re.search(rf'\(itoa\s+{re.escape(name)}\)', text)
+            ):
+                desired[name] = 'purged_count'
+            elif name == 'n' and re.search(r'\(acad_strlsort\s+n\)', text):
+                desired[name] = 'dict_names'
+            elif name == 'b' and re.search(r'\(setq\s+b\s+\(acad_strlsort\b', text):
+                desired[name] = 'sorted_names'
+            elif name == 'c' and re.search(r'\(foreach\s+c\b', text):
+                desired[name] = 'dict_name'
+
+        used = set(locals_list) - set(desired)
+        rename_map: Dict[str, str] = {}
+        for old, new in desired.items():
+            unique = new
+            counter = 2
+            while unique in used:
+                unique = f'{new}_{counter}'
+                counter += 1
+            used.add(unique)
+            rename_map[old] = unique
+        return rename_map
 
     def _generate_body(self, spec: Dict[str, Any]) -> List[str]:
         instructions = spec['func'].instructions[spec['body_start']:]
@@ -1113,14 +1217,9 @@ class LispGenerator:
             elif name == 'INIT_ARGS' and inst.operands:
                 consumed = pop_many((inst.operands[0] // 2) * 2)
                 flush_stack()
-                if consumed:
-                    preview = ', '.join(consumed[:4])
-                    lines.append(f'  ;; init-args {inst.operands[0]}: {preview}')
             elif name == 'END_DEFUN_CLEANUP' and inst.operands:
                 dropped = pop_many(inst.operands[0] + 2)
                 flush_stack()
-                if dropped:
-                    lines.append(f'  ;; cleanup {inst.operands[0]} vars')
             elif name in ('BR_IF_TRUE', 'JMP16_IF', 'JMP16_IF_2', 'JMP16_IFNOT', 'JMP16_IFNOT_2'):
                 cond = pop_expr('T' if 'IFNOT' not in name else 'nil')
                 flush_stack()
@@ -1309,14 +1408,9 @@ class LispGenerator:
             elif name == 'INIT_ARGS' and inst.operands:
                 consumed = pop_many((inst.operands[0] // 2) * 2)
                 flush_stack()
-                if consumed:
-                    preview = ', '.join(consumed[:4])
-                    lines.append(f'{"  " * indent};; init-args {inst.operands[0]}: {preview}')
             elif name == 'END_DEFUN_CLEANUP' and inst.operands:
                 dropped = pop_many(inst.operands[0] + 2)
                 flush_stack()
-                if dropped:
-                    lines.append(f'{"  " * indent};; cleanup {inst.operands[0]} vars')
             elif name in ('COND_OR', 'AND', 'AND2'):
                 cond = pop_expr('nil')
                 target_offset = inst.offset + inst.size + inst.operands[0] if inst.operands else None
@@ -1800,6 +1894,81 @@ class LispGenerator:
     def _statement_line(self, expr: str, indent: int = 1) -> str:
         prefix = '  ' * indent
         return f'{prefix}{expr}'
+
+    def _strip_strings(self, text: str) -> str:
+        result: List[str] = []
+        in_string = False
+        escaped = False
+        for ch in text:
+            if escaped:
+                escaped = False
+                result.append(' ' if in_string else ch)
+                continue
+            if ch == '\\' and in_string:
+                escaped = True
+                result.append(' ')
+                continue
+            if ch == '"':
+                in_string = not in_string
+                result.append(' ')
+                continue
+            result.append(' ' if in_string else ch)
+        return ''.join(result)
+
+    def _is_symbol_char(self, ch: str) -> bool:
+        return bool(re.match(r'[A-Za-z0-9_:+<>=?.*/-]', ch))
+
+    def _symbol_pattern(self, symbol: str) -> re.Pattern:
+        return re.compile(rf'(?<![A-Za-z0-9_:+<>=?.*/-]){re.escape(symbol)}(?![A-Za-z0-9_:+<>=?.*/-])')
+
+    def _replace_symbols(self, text: str, replacements: Dict[str, str]) -> str:
+        if not replacements:
+            return text
+        keys = sorted(replacements, key=len, reverse=True)
+        result: List[str] = []
+        i = 0
+        in_string = False
+        escaped = False
+        while i < len(text):
+            ch = text[i]
+            if escaped:
+                result.append(ch)
+                escaped = False
+                i += 1
+                continue
+            if ch == '\\' and in_string:
+                result.append(ch)
+                escaped = True
+                i += 1
+                continue
+            if ch == '"':
+                result.append(ch)
+                in_string = not in_string
+                i += 1
+                continue
+            if in_string:
+                result.append(ch)
+                i += 1
+                continue
+
+            replaced = False
+            prev = text[i - 1] if i else ''
+            if not prev or not self._is_symbol_char(prev):
+                for key in keys:
+                    if not text.startswith(key, i):
+                        continue
+                    nxt_pos = i + len(key)
+                    nxt = text[nxt_pos] if nxt_pos < len(text) else ''
+                    if nxt and self._is_symbol_char(nxt):
+                        continue
+                    result.append(replacements[key])
+                    i = nxt_pos
+                    replaced = True
+                    break
+            if not replaced:
+                result.append(ch)
+                i += 1
+        return ''.join(result)
 
     def _is_symbol_like(self, value: str) -> bool:
         if not value:

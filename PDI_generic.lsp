@@ -1,78 +1,48 @@
 ;; Auto-decompiled from PDI.fas
-;; Decompiler: fas4_decompiler.py  (full-semantics pass)
-;; Functions: 2   Warnings: 0
+;; Generated AutoLISP output
 
-;; Recovered strings (first 12):
-;;   \nNo dictionary item(s) matched pattern.\s
-;;    dictionary item(s) purged.\s
-;;   \n
-;;   ".
-;;   \n Purging dictionary "
-;;   \n Purge Dictionary Items <Enter case sensitive pattern>:\s
-;;   \n NOTE: Purging "ACAD_*" may corrupt the drawing file.\s
-;;   \n ======================================================
-;;   \n\s\s\s\s\s
-;;   \n ------------------------------------------------------
-;;   \n Current Dictionary List:\s
-
-;; Referenced symbols: MSG, A
-(defun msg ()
-  (a 'msg)
-)
-
-;; Original arg hints: B
-;; Referenced symbols: PRINC, _al-bind-alist, NAMEDOBJDICT, ENTGET, CDR, C, CAR, =, N, CONS
-;; Referenced strings: \n Current Dictionary List:\s, \n ------------------------------------------------------, \n\s\s\s\s\s
-(defun c:pdi (/ b c n gvar_31_princ *error* gvar_28_entget)
-  (setq c nil)
-  (setq n nil)
-  (setq gvar_31_princ nil)
-  (setq *error* nil)
-  (princ)
-  (setq gvar_28_entget '_al-bind-alist)
-  (setq c (cdr (entget (namedobjdict))))
-  (while c
-    (if (= (car (car c)) 3)
+(defun c:pdi (/ sorted_names dict_name dict_names pattern purged_count)
+  (setq dict_name (cdr (entget (namedobjdict))))
+  (while dict_name
+    (if (= (car (car dict_name)) 3)
       (progn
-        (setq n (cons (cdr (car c)) n))
+        (setq dict_names (cons (cdr (car dict_name)) dict_names))
       )
     )
-    (if (cdr c)
+    (if (cdr dict_name)
       (progn
-        (setq c (cdr c))
+        (setq dict_name (cdr dict_name))
       )
       (progn
-        (setq c nil)
+        (setq dict_name nil)
       )
     )
   )
   (princ "\n Current Dictionary List: ")
   (princ "\n ------------------------------------------------------")
-  (setq b (acad_strlsort n))
-  ;; init-args 3: 'c, nil
-  (foreach c b
-    (princ (strcat "\n     " c))
+  (setq sorted_names (acad_strlsort dict_names))
+  (foreach dict_name sorted_names
+    (princ (strcat "\n     " dict_name))
   )
   (princ "\n ======================================================")
   (princ "\n NOTE: Purging \"ACAD_*\" may corrupt the drawing file. ")
   (textscr)
-  (if (> (strlen (setq gvar_31_princ (getstring "\n Purge Dictionary Items <Enter case sensitive pattern>: "))) 0)
+  (if (> (strlen (setq pattern (getstring "\n Purge Dictionary Items <Enter case sensitive pattern>: "))) 0)
     (progn
-      (setq *error* 0)
-      (setq b n)
-      ;; init-args 3: 'c, nil
-      (foreach c b
-        (if (wcmatch c gvar_31_princ)
+      (setq purged_count 0)
+      (setq sorted_names dict_names)
+      (foreach dict_name sorted_names
+        (if (wcmatch dict_name pattern)
           (progn
-            (dictremove (namedobjdict) c)
-            (princ (strcat "\n Purging dictionary \"" c "\"."))
-            (setq *error* (1+ *error*))
+            (dictremove (namedobjdict) dict_name)
+            (princ (strcat "\n Purging dictionary \"" dict_name "\"."))
+            (setq purged_count (1+ purged_count))
           )
         )
       )
-      (if (> *error* 0)
+      (if (> purged_count 0)
         (progn
-          (princ (strcat "\n" (itoa *error*) " dictionary item(s) purged. "))
+          (princ (strcat "\n" (itoa purged_count) " dictionary item(s) purged. "))
         )
         (progn
           (princ "\nNo dictionary item(s) matched pattern. ")
@@ -80,9 +50,5 @@
       )
     )
   )
-  (setq c nil)
-  (setq n nil)
-  (setq gvar_31_princ nil)
-  (setq *error* nil)
   (princ)
 )
