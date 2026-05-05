@@ -1,157 +1,131 @@
-# FAS to LSP Converter
+# Fas2Lsp
 
-A comprehensive toolkit for working with AutoCAD FAS (Fast Load) files, including decompilation to LSP (LISP) format and a Language Server Protocol implementation for enhanced development experience.
-Please aware that this tool only helps you reverse about 70% of the Fas format to the original Lsp format and far from being perfect but it does the job :D
+Fas2Lsp is an experimental toolkit for decoding AutoCAD/BricsCAD FAS files back into readable AutoLISP (`.lsp`) output.
 
-## Overview
+The project currently focuses on FAS4 files and includes a practical compatibility path for loading decoded output in BricsCAD, especially for cases where BricsCAD cannot load AutoCAD `.fas` files directly.
 
-This project provides tools to:
-1. Parse and decompile FAS files (both standard and FAS4 format) to human-readable LSP (LISP) code
-2. Analyze the structure and content of FAS files
-3. Provide Language Server Protocol (LSP) features for FAS files in compatible editors
+## Current Status
 
-FAS files are compiled AutoLISP code used in AutoCAD. This toolkit makes it easier to work with these files by converting them back to their original LISP format and providing modern development tools.
+This is not a perfect source-code recovery tool. FAS files do not preserve all original source structure, names, comments, or external runtime dependencies. The generated `.lsp` is best treated as a reconstructed, editable starting point.
 
-## Features
+The current decoder can:
 
-- **FAS Decompilation**: Convert FAS files to readable LSP (LISP) code
-- **Multiple Format Support**: Handles both standard FAS and FAS4 file formats
-- **Symbol Extraction**: Extracts and displays symbols, functions, and string tables
-- **LSP Integration**: Language Server Protocol implementation for IDE integration
-- **Analysis Tools**: Utilities to analyze and understand FAS file structure
+- Parse and disassemble FAS4 bytecode.
+- Recover many function definitions, command names, local variables, string literals, and symbol references.
+- Emit runnable AutoLISP-style output where possible.
+- Add compatibility helpers for decoded calls that collide with BricsCAD or AutoLISP built-ins.
+- Validate generated `.lsp` syntax with the included validator.
 
-## Installation
+Known limitations:
 
-### Prerequisites
+- Decompiled output may still need manual cleanup.
+- External application frameworks are not bundled automatically. If a FAS file depends on other `.fas`, `.vlx`, `.arx`, `.dcl`, `.odcl`, or `.lsp` files, those dependencies are still required or must be stubbed.
+- Some helper behavior is inferred from bytecode usage, not recovered from original source.
+- Command behavior should always be tested in CAD before using it on important drawings.
+
+## Repository Contents
+
+```text
+Fas2Lsp/
+  fas4_decompiler.py       Main FAS4 decoder and AutoLISP generator
+  validate.py              Generated LSP syntax validator
+  bib.fas                  Sample/input FAS file currently under investigation
+  bib_generic.lsp          Generated LSP output for bib.fas
+  PDI.fas                  Small sample FAS file
+  PDI_generic.lsp          Generated LSP output for PDI.fas
+  compare_lsp.py           Output comparison helper
+  decrypt_fas4.py          FAS4 decoding/decryption helper
+  analyze_rosetta.py       Analysis helper
+  test_disasm.py           Disassembler test scaffold
+  server/                  Older parser/LSP server experiments
+```
+
+## Requirements
+
 - Python 3.8 or newer
-- Poetry (Python package manager)
+- BricsCAD or AutoCAD for testing generated AutoLISP
 
-### Setup
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/yourusername/fas-lsp.git
-   cd fas-lsp
-   ```
+No network service is required for local decoding.
 
-2. Install dependencies using Poetry:
-   ```bash
-   poetry install
-   ```
+## Basic Usage
 
-3. Activate the virtual environment:
-   ```bash
-   poetry shell
-   ```
+Decode a FAS4 file:
 
-## Usage
-
-### Decompiling FAS Files
-
-#### Universal Decompiler (Recommended)
-To decompile any FAS file (automatically detects format):
-```bash
-python decompile_any.py path/to/your/file.fas
+```powershell
+python fas4_decompiler.py bib.fas bib_generic.lsp
 ```
 
-You can also specify a custom output file:
-```bash
-python decompile_any.py path/to/your/file.fas -o path/to/output.lsp
+Validate generated output:
+
+```powershell
+python validate.py bib_generic.lsp
 ```
 
-#### Format-Specific Decompilers
-To decompile a standard FAS file:
-```bash
-python decompile.py
-```
-
-To decompile a FAS4 format file:
-```bash
-python decompile_fas4.py
-```
-
-By default, these scripts will process the included sample file `PurgeDictionaryItems[PDI].fas`. To use a different file, edit the script or modify the `input_file` variable.
-
-### Analyzing FAS Files
-
-To analyze the structure of a FAS file:
-```bash
-python analyze_fas.py
-```
-
-For decrypted FAS content analysis:
-```bash
-python analyze_decrypted.py
-```
-
-### Using the Language Server
-
-Start the LSP server:
-```bash
-poetry run fas-lsp
-```
-
-Configure your editor to use the FAS language server. The server provides features like:
-- Hover information for symbols
-- Decompilation of FAS files on open
-- Symbol navigation
-
-## Project Structure
-
-```
-fas-lsp/
-├── server/                  # LSP server implementation
-│   ├── fas_parser.py        # Parser for standard FAS files
-│   ├── fas4_parser.py       # Parser for FAS4 format files
-│   └── server.py            # LSP server implementation
-├── client/                  # Editor extension (placeholder)
-├── decompile_any.py         # Universal decompiler (auto-detects format)
-├── decompile.py             # Script to decompile standard FAS files
-├── decompile_fas4.py        # Script to decompile FAS4 format files
-├── analyze_fas.py           # Utility to analyze FAS file structure
-├── analyze_decrypted.py     # Utility to analyze decrypted FAS content
-├── create_test_fas.py       # Utility to create test FAS files
-├── PurgeDictionaryItems[PDI].fas  # Sample FAS file
-└── pyproject.toml           # Project configuration and dependencies
-```
-
-## Examples
-
-### Decompiled LSP Output
-
-The decompilation process converts binary FAS files into readable LISP code:
+Load the decoded file in BricsCAD:
 
 ```lisp
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; PurgeDictionaryItems - Utility for cleaning up dictionaries
-;; Decompiled from FAS4 format
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defun PURGE_DICTIONARY_ITEMS (DICTIONARY_ITEMS / DICTIONARY ITEMS ITEM)
-  (if (= (type DICTIONARY_ITEMS) 'LIST)
-    (progn
-      (foreach DICTIONARY DICTIONARY_ITEMS
-        (if (= (type DICTIONARY) 'STR)
-          (if (setq DICTIONARY (dictnext (namedobjdict) DICTIONARY T))
-            (progn
-              (setq ITEMS (tblsearch "DICTIONARY" DICTIONARY))
-              (foreach ITEM ITEMS
-                (dictremove DICTIONARY ITEM)
-              )
-            )
-          )
-        )
-      )
-      T
-    )
-    nil
-  )
-)
+(load "F:/Fas2Lsp/bib_generic.lsp")
 ```
 
-## Contributing
+Call a decoded command, for example:
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+```lisp
+POLYCC
+```
 
-## License
+## BricsCAD Compatibility Notes
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+BricsCAD cannot load AutoCAD `.fas` files directly in many cases, so this project emits plain `.lsp` output.
+
+The generator now includes compatibility helpers for several decoded patterns found in `bib.fas`, including:
+
+- One-argument decoded `POLAR` calls routed through `fas-polar1`.
+- Project-style `RTOS` calls routed through `fas-rtos1` / `fas-rtos3` so they do not collide with AutoLISP `rtos`.
+- Project-style `GETVAR` calls routed through `fas-getvar2` / `fas-getvar3`.
+- `IN_PARAM` lookup support for lists, association lists, lambda-style selectors, and entity DXF group reads.
+- A BricsCAD selection fallback for the missing `PROJET/PA_PROJET/AR_PROJET` project dialog.
+
+For `POLYCC`, the original FAS appears to call a project selection/dialog framework named `Projet/PA_Projet`. That framework is not present in this repository, so the generated file uses a fallback entity selection prompt. This allows the command to load and continue in BricsCAD, but it is not a full replacement for the original application UI.
+
+## Regenerating Included Outputs
+
+Regenerate both included sample outputs:
+
+```powershell
+python fas4_decompiler.py bib.fas bib_generic.lsp
+python fas4_decompiler.py PDI.fas PDI_generic.lsp
+python validate.py bib_generic.lsp
+python validate.py PDI_generic.lsp
+```
+
+Expected validator output:
+
+```text
+[PASS] bib_generic.lsp
+[PASS] PDI_generic.lsp
+```
+
+## Development Notes
+
+When improving decoder quality, prefer fixing `fas4_decompiler.py` and regenerating the `.lsp` output instead of hand-editing generated files. Hand patches are useful for experiments, but decoder-level fixes are repeatable across files.
+
+Useful checks:
+
+```powershell
+python -m py_compile fas4_decompiler.py
+python validate.py bib_generic.lsp
+python validate.py PDI_generic.lsp
+```
+
+If a generated file loads but a command fails in CAD, capture:
+
+- The exact command called.
+- The exact BricsCAD/AutoCAD error text.
+- The expression shown near the error.
+- The call stack if available.
+
+That information usually identifies whether the issue is syntax recovery, function arity recovery, a built-in name collision, or a missing external dependency.
+
+## Safety
+
+Generated LSP should be reviewed before use. Test in a scratch drawing first. Some decoded commands may create, modify, or delete drawing entities depending on the original FAS behavior.
